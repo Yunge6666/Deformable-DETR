@@ -5,13 +5,11 @@ COCO dataset which returns image_id for evaluation.
 Mostly copy-paste from https://github.com/pytorch/vision/blob/13b35ff/references/detection/coco_utils.py
 """
 from pathlib import Path
-from config import config
+import os, sys
 import os.path as osp
-import json
 import torch
 import torch.utils.data
 import torchvision
-from config import config
 from pycocotools import mask as coco_mask
 from datasets.cocodet import CocoDetection
 import datasets.transforms as T
@@ -27,36 +25,16 @@ class CocoDetection(CocoDetection):
         self.phase = phase
         self.prepare = ConvertCocoPolysToMask(return_masks)
 
-    def _filter_ignores(self, target):
-
-        # annotations = target['annotations']
-        # cates = np.array([rb['category_id'] for rb in annotations])
-        target = list(filter(lambda rb: rb['category_id'] > -1, target))
-        # target['annotations'] = annotations
-        return target
-
-    def _minus_target_label(self, target, value):
-
-        results = []
-        for t in target:
-            t['category_id'] -= value
-            results.append(t)
-        return results
-
     def __getitem__(self, idx):
         
-        img, target, imgname = super(CocoDetection, self).__getitem__(idx)
-
-        target = self._minus_target_label(target, 1)
-        total = len(target)
+        img, target = super(CocoDetection, self).__getitem__(idx)
         image_id = self.ids[idx]
         
         target = {'image_id': image_id, 'annotations': target}
-
         img, target = self.prepare(img, target)
         if self._transforms is not None:
             img, target = self._transforms(img, target)
-        return img, target, imgname
+        return img, target
 
 
 def convert_coco_poly_to_mask(segmentations, height, width):
@@ -88,6 +66,8 @@ class ConvertCocoPolysToMask(object):
 
         anno = target["annotations"]
 
+        anno = [obj for obj in anno if 'iscrowd' not in obj or obj['iscrowd'] == 0]
+
         boxes = [obj["bbox"] for obj in anno]
         # guard against no boxes via resizing
         boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
@@ -111,21 +91,25 @@ class ConvertCocoPolysToMask(object):
                 keypoints = keypoints.view(num_keypoints, -1, 3)
 
         keep = (boxes[:, 3] > boxes[:, 1]) & (boxes[:, 2] > boxes[:, 0])
+        boxes = boxes[keep]
+        classes = classes[keep]
+        if self.return_masks:
+            masks = masks[keep]
+        if keypoints is not None:
+            keypoints = keypoints[keep]
+
+        target = {}
+        target["boxes"] = boxes
+        target["labels"] = classes
+        if self.return_masks:
+            target["masks"] = masks
+        target["image_id"] = image_id
+        if keypoints is not None:
+            target["keypoints"] = keypoints
 
         # for conversion to coco api
         area = torch.tensor([obj["area"] for obj in anno])
-        iscrowd = torch.BoolTensor([obj["iscrowd"] if "iscrowd" in obj else 0 for obj in anno])
-        iscrowd |= classes != 0
-
-        target = {}
-        target["boxes"] = boxes[keep]
-        target["labels"] = classes[keep]
-        if self.return_masks:
-            target["masks"] = masks[keep]
-        target["image_id"] = image_id
-        if keypoints is not None:
-            target["keypoints"] = keypoints[keep]
-
+        iscrowd = torch.tensor([obj["iscrowd"] if "iscrowd" in obj else 0 for obj in anno])
         target["area"] = area[keep]
         target["iscrowd"] = iscrowd[keep]
 
@@ -166,32 +150,15 @@ def make_coco_transforms(image_set):
 
     raise ValueError(f'unknown {image_set}')
 
-def construct_dataset(ann_file, image_set, args):
 
-    imgDir = '/media/yunge/HDD1/MOTR/MOTR/datasets/crowdhuman/val/Images'
-    dataset = CocoDetection(imgDir, ann_file, image_set,
-        transforms = make_coco_transforms(image_set), return_masks=args.masks)
-    return dataset
+def build(image_set, args):
 
-def build(image_set, args, fpath = None):
-
-    # root = osp.join(config.imgDir, 'annotations')
     root = Path(args.coco_path)
-    assert osp.exists(root), f'provided COCO path {root} does not exist'
-
-    # PATHS = {
-    #     'train': (config.imgDir, config.train_json),
-    #     'val': (config.imgDir, config.eval_json)
-    # }
-
+    assert root.exists(), f'provided COCO path {root} does not exist'
     PATHS = {
-        "train": (root / "train" , root / "annotations" / "crowdhuman_train.json"),
-        "val": (root / "val" , root / "annotations" / "crowdhuman_val.json"),
+        'train': (osp.join(root, '../images'), osp.join(root,'crowdhuman2020_train.json')),
+        'val': (osp.join(root, '../images'), osp.join(root, 'crowdhuman2020_val.json'))
     }
-
-    # if fpath is not None and osp.exists(fpath):
-    #     PATHS = {'train':(config.imgDir, config.train_json),
-    #              'val':(config.imgDir, fpath)}
 
     img_folder, ann_file = PATHS[image_set]
     

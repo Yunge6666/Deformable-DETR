@@ -22,7 +22,7 @@ class data_prefetcher():
 
     def preload(self):
         try:
-            self.next_samples, self.next_targets = next(self.loader)
+            self.next_samples, self.next_targets, _ = next(self.loader)
         except StopIteration:
             self.next_samples = None
             self.next_targets = None
@@ -62,7 +62,7 @@ class data_prefetcher():
             self.preload()
         else:
             try:
-                samples, targets = next(self.loader)
+                samples, targets, _ = next(self.loader)
                 samples, targets = to_cuda(samples, targets, self.device)
             except StopIteration:
                 samples = None

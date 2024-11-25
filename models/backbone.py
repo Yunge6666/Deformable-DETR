@@ -1,4 +1,8 @@
 # ------------------------------------------------------------------------
+# H-DETR
+# Copyright (c) 2022 Peking University & Microsoft Research Asia. All Rights Reserved.
+# Licensed under the MIT-style license found in the LICENSE file in the root directory
+# ------------------------------------------------------------------------
 # Deformable DETR
 # Copyright (c) 2020 SenseTime. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 [see LICENSE for details]
@@ -22,6 +26,9 @@ from typing import Dict, List
 from util.misc import NestedTensor, is_main_process
 
 from .position_encoding import build_position_encoding
+from .swin_transformer import SwinTransformer
+# from .swin import SwinTransformer
+from .sparsevit2 import SparseViT
 
 
 class FrozenBatchNorm2d(torch.nn.Module):
@@ -41,15 +48,29 @@ class FrozenBatchNorm2d(torch.nn.Module):
         self.register_buffer("running_var", torch.ones(n))
         self.eps = eps
 
-    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
-                              missing_keys, unexpected_keys, error_msgs):
-        num_batches_tracked_key = prefix + 'num_batches_tracked'
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        num_batches_tracked_key = prefix + "num_batches_tracked"
         if num_batches_tracked_key in state_dict:
             del state_dict[num_batches_tracked_key]
 
         super(FrozenBatchNorm2d, self)._load_from_state_dict(
-            state_dict, prefix, local_metadata, strict,
-            missing_keys, unexpected_keys, error_msgs)
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
 
     def forward(self, x):
         # move reshapes to the beginning
@@ -65,11 +86,17 @@ class FrozenBatchNorm2d(torch.nn.Module):
 
 
 class BackboneBase(nn.Module):
-
-    def __init__(self, backbone: nn.Module, train_backbone: bool, return_interm_layers: bool):
+    def __init__(
+        self, backbone: nn.Module, train_backbone: bool, return_interm_layers: bool
+    ):
         super().__init__()
         for name, parameter in backbone.named_parameters():
-            if not train_backbone or 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
+            if (
+                not train_backbone
+                or "layer2" not in name
+                and "layer3" not in name
+                and "layer4" not in name
+            ):
                 parameter.requires_grad_(False)
         if return_interm_layers:
             # return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
@@ -77,7 +104,7 @@ class BackboneBase(nn.Module):
             self.strides = [8, 16, 32]
             self.num_channels = [512, 1024, 2048]
         else:
-            return_layers = {'layer4': "0"}
+            return_layers = {"layer4": "0"}
             self.strides = [32]
             self.num_channels = [2048]
         self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
@@ -95,18 +122,154 @@ class BackboneBase(nn.Module):
 
 class Backbone(BackboneBase):
     """ResNet backbone with frozen BatchNorm."""
-    def __init__(self, name: str,
-                 train_backbone: bool,
-                 return_interm_layers: bool,
-                 dilation: bool):
+
+    def __init__(
+        self,
+        name: str,
+        train_backbone: bool,
+        return_interm_layers: bool,
+        dilation: bool,
+    ):
         norm_layer = FrozenBatchNorm2d
         backbone = getattr(torchvision.models, name)(
             replace_stride_with_dilation=[False, False, dilation],
-            pretrained=is_main_process(), norm_layer=norm_layer)
-        assert name not in ('resnet18', 'resnet34'), "number of channels are hard coded"
+            pretrained=is_main_process(),
+            norm_layer=norm_layer,
+        )
+        assert name not in ("resnet18", "resnet34"), "number of channels are hard coded"
         super().__init__(backbone, train_backbone, return_interm_layers)
         if dilation:
             self.strides[-1] = self.strides[-1] // 2
+
+
+class TransformerBackbone(nn.Module):
+    def __init__(
+        self, backbone: str, train_backbone: bool, return_interm_layers: bool, args
+    ):
+        super().__init__()
+        out_indices = (1, 2, 3)
+        if backbone == "SparseVit":
+            backbone = SparseViT(
+                # embed_dims=96,
+                # depths=[2, 2, 6, 2],
+                # num_heads=[3, 6, 12, 24],
+                # window_size=7,
+                # patch_norm=True,
+                # mlp_ratio=4,
+                # qkv_bias=True,
+                # qk_scale=None,
+                # drop_rate=0.,
+                # attn_drop_rate=0.,
+                # drop_path_rate=0.2,
+                # out_indices=(1, 2, 3),
+                # with_cp=True,
+                # convert_weights=False,
+                # # init_cfg=dict(type='Pretrained', checkpoint='https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_tiny_patch4_window7_224.pth')
+
+                embed_dim=96,
+                depths=[2, 2, 6, 2],
+                num_heads=[3, 6, 12, 24],
+                window_size=7,
+                ape=False,
+                drop_path_rate=args.drop_path_rate,
+                patch_norm=True,
+                use_checkpoint=True,
+                out_indices=out_indices
+                )
+            embed_dim = 96
+            # backbone.init_weights(args.pretrained_backbone_path)        
+        elif backbone == "swin_tiny":
+            backbone = SwinTransformer(
+                embed_dim=96,
+                depths=[2, 2, 6, 2],
+                num_heads=[3, 6, 12, 24],
+                window_size=7,
+                ape=False,
+                drop_path_rate=args.drop_path_rate,
+                patch_norm=True,
+                use_checkpoint=True,
+                out_indices=out_indices,
+            )
+            embed_dim = 96
+            backbone.init_weights(args.pretrained_backbone_path)
+        elif backbone == "swin_small":
+            backbone = SwinTransformer(
+                embed_dim=96,
+                depths=[2, 2, 18, 2],
+                num_heads=[3, 6, 12, 24],
+                window_size=7,
+                ape=False,
+                drop_path_rate=args.drop_path_rate,
+                patch_norm=True,
+                use_checkpoint=True,
+                out_indices=out_indices,
+            )
+            embed_dim = 96
+            backbone.init_weights(args.pretrained_backbone_path)
+        elif backbone == "swin_large":
+            backbone = SwinTransformer(
+                embed_dim=192,
+                depths=[2, 2, 18, 2],
+                num_heads=[6, 12, 24, 48],
+                window_size=7,
+                ape=False,
+                drop_path_rate=args.drop_path_rate,
+                patch_norm=True,
+                use_checkpoint=True,
+                out_indices=out_indices,
+            )
+            embed_dim = 192
+            backbone.init_weights(args.pretrained_backbone_path)
+        elif backbone == "swin_large_window12":
+            backbone = SwinTransformer(
+                pretrain_img_size=384,
+                embed_dim=192,
+                depths=[2, 2, 18, 2],
+                num_heads=[6, 12, 24, 48],
+                window_size=12,
+                ape=False,
+                drop_path_rate=args.drop_path_rate,
+                patch_norm=True,
+                use_checkpoint=True,
+                out_indices=out_indices,
+            )
+            embed_dim = 192
+            backbone.init_weights(args.pretrained_backbone_path)
+        else:
+            raise NotImplementedError
+
+        for name, parameter in backbone.named_parameters():
+            # TODO: freeze some layers?
+            if not train_backbone:
+                parameter.requires_grad_(False)
+
+        if return_interm_layers:
+
+            self.strides = [8, 16, 32]
+            self.num_channels = [
+                embed_dim * 2,
+                embed_dim * 4,
+                embed_dim * 8,
+            ]
+        else:
+            self.strides = [32]
+            self.num_channels = [embed_dim * 8]
+
+        self.body = backbone
+
+    def forward(self, tensor_list: NestedTensor):
+        xs = self.body(tensor_list.tensors)
+        # 如果 xs 是一个 list，将其转换为 dict
+        if isinstance(xs, list):
+            xs = {str(i): x for i, x in enumerate(xs)}
+
+        out: Dict[str, NestedTensor] = {}
+        for name, x in xs.items():
+            m = tensor_list.mask
+            assert m is not None
+            mask = F.interpolate(m[None].float(), size=x.shape[-2:]).to(torch.bool)[0]
+            out[name] = NestedTensor(x, mask)
+        return out
 
 
 class Joiner(nn.Sequential):
@@ -133,6 +296,13 @@ def build_backbone(args):
     position_embedding = build_position_encoding(args)
     train_backbone = args.lr_backbone > 0
     return_interm_layers = args.masks or (args.num_feature_levels > 1)
-    backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation)
+    if "resnet" in args.backbone:
+        backbone = Backbone(
+            args.backbone, train_backbone, return_interm_layers, args.dilation,
+        )
+    else:
+        backbone = TransformerBackbone(
+            args.backbone, train_backbone, return_interm_layers, args
+        )
     model = Joiner(backbone, position_embedding)
     return model

@@ -7,3 +7,5 @@
 # ------------------------------------------------------------------------------------------------
 
 from .ms_deform_attn import MSDeformAttn
+from .ms_deform_attn2 import MSDeformAttn2
+

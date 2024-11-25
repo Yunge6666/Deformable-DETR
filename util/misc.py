@@ -27,36 +27,36 @@ from torch import Tensor
 
 # needed due to empty tensor bug in pytorch and torchvision 0.5
 import torchvision
-if float(torchvision.__version__[:3]) < 0.5:
-    import math
-    from torchvision.ops.misc import _NewEmptyTensorOp
-    def _check_size_scale_factor(dim, size, scale_factor):
-        # type: (int, Optional[List[int]], Optional[float]) -> None
-        if size is None and scale_factor is None:
-            raise ValueError("either size or scale_factor should be defined")
-        if size is not None and scale_factor is not None:
-            raise ValueError("only one of size or scale_factor should be defined")
-        if not (scale_factor is not None and len(scale_factor) != dim):
-            raise ValueError(
-                "scale_factor shape must match input shape. "
-                "Input is {}D, scale_factor size is {}".format(dim, len(scale_factor))
-            )
-    def _output_size(dim, input, size, scale_factor):
-        # type: (int, Tensor, Optional[List[int]], Optional[float]) -> List[int]
-        assert dim == 2
-        _check_size_scale_factor(dim, size, scale_factor)
-        if size is not None:
-            return size
-        # if dim is not 2 or scale_factor is iterable use _ntuple instead of concat
-        assert scale_factor is not None and isinstance(scale_factor, (int, float))
-        scale_factors = [scale_factor, scale_factor]
-        # math.floor might return float in py2.7
-        return [
-            int(math.floor(input.size(i + 2) * scale_factors[i])) for i in range(dim)
-        ]
-elif float(torchvision.__version__[:3]) < 0.7:
-    from torchvision.ops import _new_empty_tensor
-    from torchvision.ops.misc import _output_size
+# if float(torchvision.__version__[:3]) < 0.5:
+#     import math
+#     from torchvision.ops.misc import _NewEmptyTensorOp
+#     def _check_size_scale_factor(dim, size, scale_factor):
+#         # type: (int, Optional[List[int]], Optional[float]) -> None
+#         if size is None and scale_factor is None:
+#             raise ValueError("either size or scale_factor should be defined")
+#         if size is not None and scale_factor is not None:
+#             raise ValueError("only one of size or scale_factor should be defined")
+#         if not (scale_factor is not None and len(scale_factor) != dim):
+#             raise ValueError(
+#                 "scale_factor shape must match input shape. "
+#                 "Input is {}D, scale_factor size is {}".format(dim, len(scale_factor))
+#             )
+#     def _output_size(dim, input, size, scale_factor):
+#         # type: (int, Tensor, Optional[List[int]], Optional[float]) -> List[int]
+#         assert dim == 2
+#         _check_size_scale_factor(dim, size, scale_factor)
+#         if size is not None:
+#             return size
+#         # if dim is not 2 or scale_factor is iterable use _ntuple instead of concat
+#         assert scale_factor is not None and isinstance(scale_factor, (int, float))
+#         scale_factors = [scale_factor, scale_factor]
+#         # math.floor might return float in py2.7
+#         return [
+#             int(math.floor(input.size(i + 2) * scale_factors[i])) for i in range(dim)
+#         ]
+# elif float(torchvision.__version__[:3]) < 0.7:
+#     from torchvision.ops import _new_empty_tensor
+#     from torchvision.ops.misc import _output_size
 
 
 class SmoothedValue(object):
@@ -120,6 +120,26 @@ class SmoothedValue(object):
             max=self.max,
             value=self.value)
 
+def unwrap(wrapped_module):
+    if isinstance(wrapped_module, DistributedDataParallel):
+        module = wrapped_module.module
+    else:
+        module = wrapped_module
+    return module
+
+
+def check_unused_parameters(model, loss_dict, weight_dict):
+    print("=== Check unused parameters ===")
+    # print unused parameters
+    print(f"set(loss_dict) - set(weight_dict) = {set(loss_dict.keys()) - set(weight_dict.keys())}")
+    print(f"set(weight_dict) - set(loss_dict) = {set(weight_dict.keys()) - set(loss_dict.keys())}")
+    
+    unused_params = [name for name, param in unwrap(model).named_parameters() 
+                        if param.grad is None and not name.startswith('backbone')]
+    if unused_params:
+        raise RuntimeError(f"Unused parameters: {unused_params}")
+    else:
+        print("All the parameters are used.")
 
 def all_gather(data):
     """
@@ -480,26 +500,18 @@ def accuracy(output, target, topk=(1,)):
     return res
 
 
-def interpolate(input, size=None, scale_factor=None, mode="nearest", align_corners=None):
+def interpolate(
+    input, size=None, scale_factor=None, mode="nearest", align_corners=None
+):
     # type: (Tensor, Optional[List[int]], Optional[float], str, Optional[bool]) -> Tensor
     """
     Equivalent to nn.functional.interpolate, but with support for empty batch sizes.
     This will eventually be supported natively by PyTorch, and this
     class can go away.
     """
-    if float(torchvision.__version__[:3]) < 0.7:
-        if input.numel() > 0:
-            return torch.nn.functional.interpolate(
-                input, size, scale_factor, mode, align_corners
-            )
-
-        output_shape = _output_size(2, input, size, scale_factor)
-        output_shape = list(input.shape[:-2]) + list(output_shape)
-        if float(torchvision.__version__[:3]) < 0.5:
-            return _NewEmptyTensorOp.apply(input, output_shape)
-        return _new_empty_tensor(input, output_shape)
-    else:
-        return torchvision.ops.misc.interpolate(input, size, scale_factor, mode, align_corners)
+    return torchvision.ops.misc.interpolate(
+        input, size, scale_factor, mode, align_corners
+    )
 
 
 def get_total_grad_norm(parameters, norm_type=2):
