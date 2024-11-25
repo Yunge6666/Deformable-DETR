@@ -1,0 +1,39 @@
+# 忽略大文件
+*.pth
+checkpoint.pth
+
+# 忽略临时文件
+*.log
+*.tmp
+*.bak
+
+# 忽略 Python 缓存文件
+__pycache__/
+*.py[cod]
+
+# 忽略IDE配置文件
+.vscode/
+.idea/
+
+# 忽略某些文件夹
+output/
+temp/
+build
+*.egg-info
+.DS_Store
+*~
+*.so
+*.o
+dist
+step.md
+*.pyc
+__pychache__
+model/dqrf/init_model
+.vscode
+output
+*.human
+*.json
+detrick
+*.csv
+*.png
+train.log
